@@ -1,15 +1,19 @@
-use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind};
+use crossterm::event::{
+    self, Event,
+    KeyCode::{self, Modifier as OtherModifier},
+    KeyEvent, KeyEventKind,
+};
 use ratatui::{
     DefaultTerminal, Frame,
     buffer::Buffer,
-    layout::Rect,
-    style::Stylize,
+    layout::{Constraint, Layout, Rect},
+    style::{Modifier, Style, Stylize},
     symbols::border,
     text::{Line, Text},
-    widgets::{Block, Paragraph, Widget},
+    widgets::{Block, Gauge, Paragraph, Widget},
 };
 use std::{default, fmt::format, io, mem, time::Duration};
-use sysinfo::{Components, System};
+use sysinfo::{Components, Cpu, System};
 
 const BYTES_IN_GB: f64 = 1073741824.0;
 
@@ -25,6 +29,7 @@ struct Memory {
 struct CPU {
     nr_cores: usize,
     cpu_usage: f32,
+    per_core_usage: Vec<f32>,
 }
 
 impl CPU {
@@ -32,6 +37,15 @@ impl CPU {
         Self {
             nr_cores: sys.cpus().len(),
             cpu_usage: sys.global_cpu_usage(),
+            per_core_usage: vec![0.0; sys.cpus().len()],
+        }
+    }
+
+    fn per_core_usage(&mut self, sys: &System) {
+        let mut cpu_core_nr = 0;
+        for cpu in sys.cpus() {
+            self.per_core_usage[cpu_core_nr] = cpu.cpu_usage();
+            cpu_core_nr += 1;
         }
     }
 
@@ -76,6 +90,7 @@ impl App {
         self.sys.refresh_all();
         self.memory = get_mem_usage(&self.sys);
         self.cpu.upadte_cpu_usage(&self.sys);
+        self.cpu.per_core_usage(&self.sys);
     }
 
     fn draw(&self, frame: &mut Frame) {
@@ -102,31 +117,101 @@ impl App {
     fn exit(&mut self) {
         self.exit = true;
     }
-}
 
-impl Widget for &App {
-    fn render(self, area: Rect, buf: &mut Buffer) {
-        let titel = Line::from(format!(" {}'s resource usage ", self.sys_name).bold());
-        let instructions = Line::from(vec![" Quit ".into(), "<Q> ".blue().bold()]);
-
+    fn render_memory(&self, area: Rect, buf: &mut Buffer) {
         let block = Block::bordered()
-            .title(titel.centered())
-            .title_bottom(instructions.centered())
+            .title(Line::from("Memory".bold()).centered())
             .border_set(border::THICK);
 
-        let memory_text = Text::from(vec![
+        let inner = block.inner(area);
+        block.render(area, buf);
+
+        let [text_area, gauge_area] =
+            Layout::vertical([Constraint::Min(0), Constraint::Length(1)]).areas(inner);
+
+        let mut text = Text::from(vec![
             Line::from(format!(
                 "Memory usage: {:.1}GB / {:.1}GB",
                 self.memory.used_mem, self.memory.total_mem,
             )),
-            Line::from(format!("Number of CPU cores: {}", self.cpu.nr_cores)),
-            Line::from(format!("CPU usage: {:.1}%", self.cpu.cpu_usage)),
+            Line::from(format!(
+                "Swap usage: {:.1}GB / {:.1}GB",
+                self.memory.used_swap, self.memory.total_swap
+            )),
         ]);
 
-        Paragraph::new(memory_text)
+        Paragraph::new(text)
+            .centered()
+            //.block(block)
+            .render(text_area, buf);
+
+        let used_mem_percent = if self.memory.total_mem > 0.0 {
+            self.memory.used_mem / self.memory.total_mem
+        } else {
+            0.0
+        };
+
+        Gauge::default()
+            .style(Modifier::BOLD)
+            .gauge_style(Style::new().white().on_black())
+            .label(format!("{:.1}% used", used_mem_percent * 100.0))
+            .ratio(used_mem_percent)
+            .render(gauge_area, buf);
+    }
+
+    fn render_CPU(&self, area: Rect, buf: &mut Buffer) {
+        let block = Block::bordered()
+            .title(Line::from("CPU".bold()).centered())
+            .border_set(border::THICK);
+
+        let mut text = Text::from(format!("Number of CPU cores: {}", self.cpu.nr_cores));
+
+        for i in (0..self.cpu.nr_cores).step_by(2) {
+            text.lines.push(Line::from(format!(
+                "CPU Core {} usage: {:4.1}% --- CPU Core {} usage: {:4.1}%",
+                i,
+                self.cpu.per_core_usage[i],
+                i + 1,
+                self.cpu.per_core_usage[i + 1]
+            )));
+        }
+        Paragraph::new(text)
             .centered()
             .block(block)
             .render(area, buf);
+    }
+}
+
+impl Widget for &App {
+    fn render(self, area: Rect, buf: &mut Buffer) {
+        // let titel = Line::from(format!(" {}'s resource usage ", self.sys_name).bold());
+        // let instructions = Line::from(vec![" Quit ".into(), "<Q> ".blue().bold()]);
+
+        // creates the outer "bounding block"
+        let outer = Block::bordered()
+            .title(Line::from(format!(" {}'s resource usage ", self.sys_name).bold()).centered())
+            .title_bottom(Line::from(vec![" Quit ".into(), "<Q> ".blue().bold()]).centered())
+            .border_set(border::THICK);
+
+        // creates the are inside the outer border
+        let inner = outer.inner(area);
+        // renders the outer border
+        outer.render(area, buf);
+
+        // splits the inner area into a top and bottom part
+        let [top, bottom] =
+            Layout::vertical([Constraint::Percentage(60), Constraint::Percentage(40)]).areas(inner);
+
+        //splits the top part (by using .areas(top)) into the mem_are and cpu_are
+        let [mem_area, cpu_area] =
+            Layout::horizontal([Constraint::Length(35), Constraint::Min(0)]).areas(top);
+
+        let [mem_u, mem_l] =
+            Layout::vertical([Constraint::Percentage(50), Constraint::Min(0)]).areas(mem_area);
+
+        // calls the cpu and mem render function and specifies the are in which they are rendered
+        self.render_memory(mem_u, buf);
+        self.render_CPU(cpu_area, buf);
     }
 }
 
