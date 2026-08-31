@@ -33,6 +33,8 @@ impl Storage {
 
     fn get_total_storage() -> u64 {
         let disks = Disks::new_with_refreshed_list();
+
+        // creates a hashmap as macos reports double the size as disks are reported multiple times.
         let mut seen_disks: HashMap<OsString, u64> = HashMap::new();
         for disk in disks.list() {
             seen_disks
@@ -44,6 +46,8 @@ impl Storage {
 
     fn get_available_storage() -> u64 {
         let disks = Disks::new_with_refreshed_list();
+
+        // creates a hashmap as macos reports double the size as disks are reported multiple times.
         let mut seen_disks: HashMap<OsString, u64> = HashMap::new();
         for disk in disks.list() {
             seen_disks
@@ -103,7 +107,7 @@ struct App {
 
 impl App {
     fn new() -> Self {
-        let mut sys = System::new_all();
+        let sys = System::new_all();
 
         Self {
             memory: get_mem_usage(&sys),
@@ -160,7 +164,7 @@ impl App {
 
     fn render_memory(&self, area: Rect, buf: &mut Buffer) {
         let block = Block::bordered()
-            .title(Line::from("Memory".bold()).centered())
+            .title(Line::from(" Memory ".bold()).centered())
             .border_set(border::THICK);
 
         let inner = block.inner(area);
@@ -169,7 +173,7 @@ impl App {
         let [text_area, gauge_area] =
             Layout::vertical([Constraint::Min(0), Constraint::Length(1)]).areas(inner);
 
-        let mut text = Text::from(vec![
+        let text = Text::from(vec![
             Line::from(format!(
                 "Memory usage: {:.1}GB / {:.1}GB",
                 self.memory.used_mem, self.memory.total_mem,
@@ -199,9 +203,9 @@ impl App {
             .render(gauge_area, buf);
     }
 
-    fn render_CPU(&self, area: Rect, buf: &mut Buffer) {
+    fn render_cpu(&self, area: Rect, buf: &mut Buffer) {
         let block = Block::bordered()
-            .title(Line::from("CPU".bold()).centered())
+            .title(Line::from(" CPU ".bold()).centered())
             .border_set(border::THICK);
 
         let mut text = Text::from(format!("Number of CPU cores: {}", self.cpu.nr_cores));
@@ -224,7 +228,7 @@ impl App {
     fn render_disks(&self, area: Rect, buf: &mut Buffer) {
         // The outer block of the disk usage tile
         let block = Block::bordered()
-            .title(Line::from("Disk Usage".bold()).centered())
+            .title(Line::from(" Disk Usage ".bold()).centered())
             .border_set(border::THICK);
 
         let inner = block.inner(area);
@@ -240,7 +244,7 @@ impl App {
             0.0
         };
 
-        let mut total_storage = Text::from(vec![
+        let total_storage = Text::from(vec![
             Line::from(format!(
                 "Total system storage: {}GB",
                 (self.storage.total_storage as f64 / 1_000_000_000.0)
@@ -282,7 +286,7 @@ impl Widget for &App {
         outer.render(area, buf);
 
         // splits the inner area into a top and bottom part
-        let [top, bottom] =
+        let [top, _bottom] =
             Layout::vertical([Constraint::Percentage(50), Constraint::Percentage(50)]).areas(inner);
 
         //splits the top part (by using .areas(top)) into the mem_are and cpu_are
@@ -294,7 +298,7 @@ impl Widget for &App {
 
         // calls the cpu and mem render function and specifies the are in which they are rendered
         self.render_memory(mem_u, buf);
-        self.render_CPU(cpu_area, buf);
+        self.render_cpu(cpu_area, buf);
         self.render_disks(mem_l, buf);
     }
 }
@@ -302,8 +306,16 @@ impl Widget for &App {
 fn main() {
     // let mut sys = System::new_all();
     // let cpuusage = sys.cpus().len
+    // let components = Components::new_with_refreshed_list();
+    // for component in &components {
+    //     if let Some(temperature) = component.temperature() {
+    //         println!("{} {temperature}°C", component.label())
+    //     } else {
+    //         println!("{} (unknown temperature)", component.label());
+    //     }
+    // }
 
-    ratatui::run(|terminal| App::new().run(terminal));
+    let _ = ratatui::run(|terminal| App::new().run(terminal));
 }
 
 fn get_mem_usage(sys: &System) -> Memory {
@@ -322,7 +334,7 @@ fn get_mem_usage(sys: &System) -> Memory {
 
 fn get_sys_name() -> String {
     match System::name() {
-        Some(sys_name) => "Your MacBook".to_string(),
+        Some(_) => "Your MacBook".to_string(),
         None => "Your Machine".to_string(),
     }
 }
