@@ -12,10 +12,47 @@ use ratatui::{
     text::{Line, Text},
     widgets::{Block, Gauge, Paragraph, Widget},
 };
-use std::{default, fmt::format, io, mem, time::Duration};
-use sysinfo::{Components, Cpu, System};
+use std::{collections::HashMap, default, ffi::OsString, fmt::format, io, mem, time::Duration};
+use sysinfo::{Components, Cpu, Disks, System};
 
 const BYTES_IN_GB: f64 = 1073741824.0;
+
+#[derive(Debug, Default)]
+struct Storage {
+    total_storage: u64,
+    available_storage: u64,
+}
+
+impl Storage {
+    fn new() -> Self {
+        Self {
+            total_storage: Self::get_total_storage(),
+            available_storage: Self::get_available_storage(),
+        }
+    }
+
+    fn get_total_storage() -> u64 {
+        let disks = Disks::new_with_refreshed_list();
+        let mut seen_disks: HashMap<OsString, u64> = HashMap::new();
+        for disk in disks.list() {
+            seen_disks
+                .entry(disk.name().to_os_string())
+                .or_insert(disk.total_space());
+        }
+        return seen_disks.values().sum();
+    }
+
+    fn get_available_storage() -> u64 {
+        let disks = Disks::new_with_refreshed_list();
+        let mut seen_disks: HashMap<OsString, u64> = HashMap::new();
+        for disk in disks.list() {
+            seen_disks
+                .entry(disk.name().to_os_string())
+                .or_insert(disk.available_space());
+        }
+        return seen_disks.values().sum();
+    }
+}
 
 #[derive(Debug, Default)]
 struct Memory {
@@ -59,6 +96,7 @@ struct App {
     sys: System,
     memory: Memory,
     cpu: CPU,
+    storage: Storage,
     sys_name: String,
     exit: bool,
 }
@@ -66,9 +104,11 @@ struct App {
 impl App {
     fn new() -> Self {
         let mut sys = System::new_all();
+
         Self {
             memory: get_mem_usage(&sys),
             cpu: CPU::new(&sys),
+            storage: Storage::new(),
             sys_name: get_sys_name(),
             sys,
             exit: false,
@@ -180,6 +220,49 @@ impl App {
             .block(block)
             .render(area, buf);
     }
+
+    fn render_disks(&self, area: Rect, buf: &mut Buffer) {
+        // The outer block of the disk usage tile
+        let block = Block::bordered()
+            .title(Line::from("Disk Usage".bold()).centered())
+            .border_set(border::THICK);
+
+        let inner = block.inner(area);
+        block.render(area, buf);
+
+        let [text_area, gauge_area] =
+            Layout::vertical([Constraint::Min(0), Constraint::Length(1)]).areas(inner);
+
+        let used_storage_percentage = if self.storage.total_storage > 0 {
+            (self.storage.total_storage - self.storage.available_storage) as f64
+                / self.storage.total_storage as f64
+        } else {
+            0.0
+        };
+
+        let mut total_storage = Text::from(vec![
+            Line::from(format!(
+                "Total system storage: {}GB",
+                (self.storage.total_storage as f64 / 1_000_000_000.0)
+            )),
+            Line::from(format!(
+                "Used storage: {:.1}GB",
+                ((self.storage.total_storage - self.storage.available_storage) as f64
+                    / 1_000_000_000.0)
+            )),
+        ]);
+
+        Paragraph::new(total_storage)
+            .centered()
+            .render(text_area, buf);
+
+        Gauge::default()
+            .style(Modifier::BOLD)
+            .gauge_style(Style::new().white().on_black())
+            .label(format!("{:.1}% used", used_storage_percentage * 100.0))
+            .ratio(used_storage_percentage)
+            .render(gauge_area, buf);
+    }
 }
 
 impl Widget for &App {
@@ -200,7 +283,7 @@ impl Widget for &App {
 
         // splits the inner area into a top and bottom part
         let [top, bottom] =
-            Layout::vertical([Constraint::Percentage(60), Constraint::Percentage(40)]).areas(inner);
+            Layout::vertical([Constraint::Percentage(50), Constraint::Percentage(50)]).areas(inner);
 
         //splits the top part (by using .areas(top)) into the mem_are and cpu_are
         let [mem_area, cpu_area] =
@@ -212,6 +295,7 @@ impl Widget for &App {
         // calls the cpu and mem render function and specifies the are in which they are rendered
         self.render_memory(mem_u, buf);
         self.render_CPU(cpu_area, buf);
+        self.render_disks(mem_l, buf);
     }
 }
 
