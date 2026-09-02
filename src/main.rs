@@ -1,21 +1,103 @@
-use crossterm::event::{
-    self, Event,
-    KeyCode::{self, Modifier as OtherModifier},
-    KeyEvent, KeyEventKind,
+use crossterm::{
+    event::{
+        self, Event,
+        KeyCode::{self, Modifier as OtherModifier, Tab},
+        KeyEvent, KeyEventKind,
+    },
+    style::Color,
 };
 use ratatui::{
     DefaultTerminal, Frame,
     buffer::Buffer,
     layout::{Constraint, Layout, Rect},
     style::{Modifier, Style, Stylize},
-    symbols::border,
+    symbols::{
+        self, block,
+        border::{self, THICK},
+    },
     text::{Line, Text},
-    widgets::{Block, Gauge, Paragraph, Widget},
+    widgets::{Block, Gauge, Paragraph, Row, Table, Tabs, Widget},
 };
-use std::{collections::HashMap, default, ffi::OsString, fmt::format, io, mem, time::Duration};
-use sysinfo::{Components, Cpu, Disks, System};
+use std::{
+    collections::{BinaryHeap, HashMap},
+    default,
+    ffi::OsString,
+    fmt::format,
+    io, mem,
+    time::Duration,
+    vec,
+};
+use sysinfo::{Components, Cpu, Disks, Pid, System};
 
 const BYTES_IN_GB: f64 = 1073741824.0;
+
+#[derive(Debug)]
+struct ProcessesEntry {
+    cpu_usage: f32,
+    memory_usage: u64,
+    pid: Pid,
+    name: OsString,
+}
+
+#[derive(Clone, Copy, PartialEq, Default, Debug)]
+enum SortKey {
+    #[default]
+    Memory,
+    CPU,
+}
+
+#[derive(Default, Debug)]
+struct Processes {
+    entry: Vec<ProcessesEntry>,
+    sort: SortKey,
+}
+impl Processes {
+    fn new(sys: &System) -> Self {
+        let mut processes = Self {
+            entry: Vec::new(),
+            sort: SortKey::Memory,
+        };
+        processes.fill_processes(sys);
+        processes
+    }
+
+    fn fill_processes(&mut self, sys: &System) {
+        self.entry.clear();
+
+        for (pid, process) in sys.processes() {
+            let entry = ProcessesEntry {
+                cpu_usage: process.cpu_usage(),
+                memory_usage: process.memory(),
+                pid: *pid,
+                name: process.name().to_os_string(),
+            };
+            self.entry.push(entry);
+        }
+    }
+
+    fn set_sort_key(&mut self, key: SortKey) {
+        self.sort = match key {
+            SortKey::Memory => SortKey::Memory,
+            SortKey::CPU => SortKey::CPU,
+        };
+        self.sort_processes();
+    }
+
+    fn sort_processes(&mut self) {
+        match self.sort {
+            SortKey::Memory => self.entry.sort_unstable_by(|a, b| {
+                b.memory_usage
+                    .cmp(&a.memory_usage)
+                    .then_with(|| a.pid.cmp(&b.pid))
+            }),
+            SortKey::CPU => self.entry.sort_unstable_by(|a, b| {
+                b.cpu_usage
+                    .total_cmp(&a.cpu_usage)
+                    .then_with(|| a.pid.cmp(&b.pid))
+            }),
+        }
+    }
+}
 
 #[derive(Debug, Default)]
 struct Storage {
@@ -102,6 +184,8 @@ struct App {
     cpu: CPU,
     storage: Storage,
     sys_name: String,
+    processes: Processes,
+    selected_tab: usize,
     exit: bool,
 }
 
@@ -114,6 +198,8 @@ impl App {
             cpu: CPU::new(&sys),
             storage: Storage::new(),
             sys_name: get_sys_name(),
+            selected_tab: 0,
+            processes: Processes::new(&sys),
             sys,
             exit: false,
         }
@@ -135,6 +221,12 @@ impl App {
         self.memory = get_mem_usage(&self.sys);
         self.cpu.upadte_cpu_usage(&self.sys);
         self.cpu.per_core_usage(&self.sys);
+        self.processes.fill_processes(&self.sys);
+        let sort_key = match self.selected_tab {
+            1 => SortKey::CPU,
+            _ => SortKey::Memory,
+        };
+        self.processes.set_sort_key(sort_key);
     }
 
     fn draw(&self, frame: &mut Frame) {
@@ -154,7 +246,16 @@ impl App {
     fn handle_key_event(&mut self, key_event: KeyEvent) {
         match key_event.code {
             KeyCode::Char('q') => self.exit(),
+            KeyCode::Tab => self.tab_switch(),
             _ => {}
+        }
+    }
+
+    fn tab_switch(&mut self) {
+        if self.selected_tab >= 1 {
+            self.selected_tab = 0
+        } else {
+            self.selected_tab += 1
         }
     }
 
@@ -184,10 +285,7 @@ impl App {
             )),
         ]);
 
-        Paragraph::new(text)
-            .centered()
-            //.block(block)
-            .render(text_area, buf);
+        Paragraph::new(text).centered().render(text_area, buf);
 
         let used_mem_percent = if self.memory.total_mem > 0.0 {
             self.memory.used_mem / self.memory.total_mem
@@ -223,6 +321,43 @@ impl App {
             .centered()
             .block(block)
             .render(area, buf);
+    }
+
+    fn render_processes(&self, area: Rect, buf: &mut Buffer) {
+        let block = Block::bordered()
+            .title(Line::from(" Processes ".bold()).centered())
+            .border_set(border::THICK);
+
+        let row_header = Row::new(vec!["Name", "PID", "CPU (%)", "Memory (GB)"]).bold();
+        let rows = self.processes.entry.iter().map(|process| {
+            Row::new(vec![
+                process.name.to_string_lossy().into_owned(),
+                process.pid.to_string(),
+                format!("{:.1}", process.cpu_usage),
+                format!("{:.1}", process.memory_usage as f64 / BYTES_IN_GB),
+            ])
+        });
+
+        let widths = [
+            Constraint::Percentage(50), // Process Name gets half the screen
+            Constraint::Percentage(15), // PID
+            Constraint::Percentage(15), // CPU
+            Constraint::Percentage(20), // Memory gets the remaining space
+        ];
+
+        let table = Table::new(rows, widths).header(row_header).block(block);
+        table.render(area, buf);
+    }
+
+    fn render_tabs(&self, area: Rect, buf: &mut Buffer) {
+        let tabs = Tabs::new(vec!["Memory Usage", "CPU Usage"])
+            .style(Style::default().white())
+            .highlight_style(Style::default().magenta().on_black().bold())
+            .select(self.selected_tab)
+            .divider(symbols::DOT)
+            .padding(" ", " ");
+
+        tabs.render(area, buf);
     }
 
     fn render_disks(&self, area: Rect, buf: &mut Buffer) {
@@ -286,7 +421,7 @@ impl Widget for &App {
         outer.render(area, buf);
 
         // splits the inner area into a top and bottom part
-        let [top, _bottom] =
+        let [top, bottom] =
             Layout::vertical([Constraint::Percentage(50), Constraint::Percentage(50)]).areas(inner);
 
         //splits the top part (by using .areas(top)) into the mem_are and cpu_are
@@ -300,22 +435,18 @@ impl Widget for &App {
         self.render_memory(mem_u, buf);
         self.render_cpu(cpu_area, buf);
         self.render_disks(mem_l, buf);
+
+        self.render_processes(bottom, buf);
+        self.render_tabs(bottom, buf);
     }
 }
 
 fn main() {
-    // let mut sys = System::new_all();
-    // let cpuusage = sys.cpus().len
-    // let components = Components::new_with_refreshed_list();
-    // for component in &components {
-    //     if let Some(temperature) = component.temperature() {
-    //         println!("{} {temperature}°C", component.label())
-    //     } else {
-    //         println!("{} (unknown temperature)", component.label());
-    //     }
-    // }
-
     let _ = ratatui::run(|terminal| App::new().run(terminal));
+    // let sys = System::new_all();
+    // for (pid, process) in sys.processes() {
+    //     println!("[{pid}] {:?} {:?}", process.name(), process.memory());
+    // }
 }
 
 fn get_mem_usage(sys: &System) -> Memory {
