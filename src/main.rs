@@ -1,10 +1,7 @@
-use crossterm::{
-    event::{
-        self, Event,
-        KeyCode::{self, Modifier as OtherModifier, Tab},
-        KeyEvent, KeyEventKind,
-    },
-    style::Color,
+use crossterm::event::{
+    self, Event,
+    KeyCode::{self},
+    KeyEvent, KeyEventKind,
 };
 use ratatui::{
     DefaultTerminal, Frame,
@@ -12,22 +9,14 @@ use ratatui::{
     layout::{Constraint, Layout, Rect},
     style::{Modifier, Style, Stylize},
     symbols::{
-        self, block,
-        border::{self, THICK},
+        self,
+        border::{self},
     },
     text::{Line, Text},
     widgets::{Block, Gauge, Paragraph, Row, Table, Tabs, Widget},
 };
-use std::{
-    collections::{BinaryHeap, HashMap},
-    default,
-    ffi::OsString,
-    fmt::format,
-    io, mem,
-    time::Duration,
-    vec,
-};
-use sysinfo::{Components, Cpu, Disks, Pid, System};
+use std::{collections::HashMap, ffi::OsString, io, time::Duration, vec};
+use sysinfo::{Disks, Pid, System};
 
 const BYTES_IN_GB: f64 = 1073741824.0;
 
@@ -306,27 +295,53 @@ impl App {
             .title(Line::from(" CPU ".bold()).centered())
             .border_set(border::THICK);
 
-        let mut text = Text::from(format!("Number of CPU cores: {}", self.cpu.nr_cores));
+        let inner = block.inner(area);
+        block.render(area, buf);
 
-        for i in (0..self.cpu.nr_cores).step_by(2) {
-            text.lines.push(Line::from(format!(
-                "CPU Core {} usage: {:4.1}% --- CPU Core {} usage: {:4.1}%",
-                i,
-                self.cpu.per_core_usage[i],
-                i + 1,
-                self.cpu.per_core_usage[i + 1]
-            )));
+        let [nr_cores_area, usage_area] =
+            Layout::vertical([Constraint::Length(2), Constraint::Min(0)]).areas(inner);
+
+        let text = Text::from(vec![
+            Line::from(format!("Number of CPU cores: {}", self.cpu.nr_cores)).centered(),
+        ]);
+
+        Paragraph::new(text).centered().render(nr_cores_area, buf);
+
+        let mut rows = Vec::new();
+
+        for core in (0..self.cpu.nr_cores).step_by(2) {
+            if core + 1 < self.cpu.nr_cores {
+                rows.push(Row::new(vec![
+                    Line::from(format!(
+                        "Core {:>2}: {:4.1}",
+                        core, self.cpu.per_core_usage[core]
+                    ))
+                    .centered(),
+                    Line::from(format!(
+                        "Core {:>2}: {:4.1}",
+                        core + 1,
+                        self.cpu.per_core_usage[core + 1]
+                    ))
+                    .centered(),
+                ]));
+            } else {
+                rows.push(Row::new(vec![
+                    Line::from(format!(
+                        "Core {:>2}: {:4.1}",
+                        core, self.cpu.per_core_usage[core]
+                    ))
+                    .centered(),
+                ]));
+            }
         }
-        Paragraph::new(text)
-            .centered()
-            .block(block)
-            .render(area, buf);
+
+        let widths = [Constraint::Percentage(50), Constraint::Percentage(50)];
+
+        Table::new(rows, widths).render(usage_area, buf);
     }
 
     fn render_processes(&self, area: Rect, buf: &mut Buffer) {
-        let block = Block::bordered()
-            .title(Line::from(" Processes ".bold()).centered())
-            .border_set(border::THICK);
+        let block = Block::bordered().border_set(border::THICK);
 
         let row_header = Row::new(vec!["Name", "PID", "CPU (%)", "Memory (GB)"]).bold();
         let rows = self.processes.entry.iter().map(|process| {
@@ -345,7 +360,7 @@ impl App {
             Constraint::Percentage(20), // Memory gets the remaining space
         ];
 
-        let table = Table::new(rows, widths).header(row_header).block(block);
+        let table = Table::new(rows, widths).header(row_header).block(block); //
         table.render(area, buf);
     }
 
@@ -381,7 +396,7 @@ impl App {
 
         let total_storage = Text::from(vec![
             Line::from(format!(
-                "Total system storage: {}GB",
+                "Total system storage: {:.1}GB",
                 (self.storage.total_storage as f64 / 1_000_000_000.0)
             )),
             Line::from(format!(
@@ -406,9 +421,6 @@ impl App {
 
 impl Widget for &App {
     fn render(self, area: Rect, buf: &mut Buffer) {
-        // let titel = Line::from(format!(" {}'s resource usage ", self.sys_name).bold());
-        // let instructions = Line::from(vec![" Quit ".into(), "<Q> ".blue().bold()]);
-
         // creates the outer "bounding block"
         let outer = Block::bordered()
             .title(Line::from(format!(" {}'s resource usage ", self.sys_name).bold()).centered())
@@ -435,7 +447,6 @@ impl Widget for &App {
         self.render_memory(mem_u, buf);
         self.render_cpu(cpu_area, buf);
         self.render_disks(mem_l, buf);
-
         self.render_processes(bottom, buf);
         self.render_tabs(bottom, buf);
     }
@@ -443,10 +454,6 @@ impl Widget for &App {
 
 fn main() {
     let _ = ratatui::run(|terminal| App::new().run(terminal));
-    // let sys = System::new_all();
-    // for (pid, process) in sys.processes() {
-    //     println!("[{pid}] {:?} {:?}", process.name(), process.memory());
-    // }
 }
 
 fn get_mem_usage(sys: &System) -> Memory {
