@@ -6,7 +6,7 @@ use crossterm::event::{
 use ratatui::{
     DefaultTerminal, Frame,
     buffer::Buffer,
-    layout::{Constraint, Layout, Rect},
+    layout::{Constraint, Flex, Layout, Rect},
     style::{Modifier, Style, Stylize},
     symbols::{
         self,
@@ -372,7 +372,11 @@ impl App {
             .divider(symbols::DOT)
             .padding(" ", " ");
 
-        tabs.render(area, buf);
+        let [center_area] = Layout::horizontal([Constraint::Length(26)])
+            .flex(Flex::Center)
+            .areas(area);
+
+        tabs.render(center_area, buf);
     }
 
     fn render_disks(&self, area: Rect, buf: &mut Buffer) {
