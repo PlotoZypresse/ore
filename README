@@ -1,0 +1,7 @@
+= Ore
+Ore is a system monitoring tool written in rust by myself for myself.
+
+== Ideas that could be fun to add
+- querying the system stats through discord, telegram or similar
+- logging of data in some way (f.x. DB, json, csv)
+- add temperature readings on mac (looks kinda involved as seen [here](https://medium.com/@vladkens/how-to-get-macos-power-metrics-with-rust-d42b0ad53967))

@@ -20,19 +20,19 @@ use sysinfo::{Disks, Pid, System};
 
 const BYTES_IN_GB: f64 = 1073741824.0;
 
+#[derive(Clone, Copy, PartialEq, Default, Debug)]
+enum SortKey {
+    #[default]
+    Memory,
+    CPU,
+}
+
 #[derive(Debug)]
 struct ProcessesEntry {
     cpu_usage: f32,
     memory_usage: u64,
     pid: Pid,
     name: OsString,
-}
-
-#[derive(Clone, Copy, PartialEq, Default, Debug)]
-enum SortKey {
-    #[default]
-    Memory,
-    CPU,
 }
 
 #[derive(Default, Debug)]
